@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEURO-LINK | Cyberpunk Gesture Control</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #020205;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .container {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+    }
+    canvas {
+      position: absolute;
+      inset: 0;
+    }
+    #neuralGrid { z-index: 0; }
+    #webcamCanvas { z-index: 1; }
+    #effectCanvas { z-index: 2; }
+    #uiCanvas { z-index: 3; }
+    #glitchOverlay {
+      z-index: 4;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+    .hud {
+      position: fixed;
+      z-index: 5;
+      pointer-events: none;
+    }
+    #scanBar {
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: linear-gradient(180deg, rgba(0,243,255,0.1) 0%, transparent 100%);
+      border-bottom: 2px solid #00f3ff;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 20px;
+    }
+    #scanBar .data-stream {
+      flex: 1;
+      height: 30px;
+      background: rgba(0,243,255,0.05);
+      border: 1px solid rgba(0,243,255,0.3);
+      position: relative;
+      overflow: hidden;
+    }
+    #scanBar .data-stream::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(0,243,255,0.8), transparent);
+      animation: scanMove 2s linear infinite;
+    }
+    @keyframes scanMove {
+      0% { left: -100%; }
+      100% { left: 200%; }
+    }
+    .mode-indicator {
+      padding: 8px 16px;
+      border: 2px solid;
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 700;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      background: rgba(0,0,0,0.8);
+    }
+    .mode-hack { border-color: #adff00; color: #adff00; box-shadow: 0 0 20px rgba(173,255,0,0.5); }
+    .mode-art { border-color: #ff0055; color: #ff0055; box-shadow: 0 0 20px rgba(255,0,85,0.5); }
+    .mode-override { border-color: #00f3ff; color: #00f3ff; box-shadow: 0 0 20px rgba(0,243,255,0.5); }
+    .mode-sokko { border-color: #E5E4E2; color: #E5E4E2; box-shadow: 0 0 20px rgba(229,228,226,0.5); }
+    #stats {
+      bottom: 20px;
+      right: 20px;
+      padding: 10px;
+      background: rgba(2,2,5,0.9);
+      border: 1px solid #00f3ff;
+      color: #00f3ff;
+      font-size: 12px;
+    }
+    #modeSelector {
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      pointer-events: auto;
+    }
+    #modeSelector button {
+      padding: 12px 24px;
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 700;
+      font-size: 12px;
+      border: 2px solid;
+      background: rgba(0,0,0,0.8);
+      cursor: pointer;
+      transition: all 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    #modeSelector button.active, #modeSelector button:hover {
+      background: rgba(255,255,255,0.1);
+      box-shadow: 0 0 30px currentColor;
+    }
+    #modeSelector .btn-hack { border-color: #adff00; color: #adff00; }
+    #modeSelector .btn-art { border-color: #ff0055; color: #ff0055; }
+    #modeSelector .btn-override { border-color: #00f3ff; color: #00f3ff; }
+    #modeSelector .btn-sokko { border-color: #E5E4E2; color: #E5E4E2; }
+    #splash {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #020205;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    }
+    #splash h1 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 48px;
+      font-weight: 900;
+      color: #00f3ff;
+      text-shadow: 0 0 30px #00f3ff, 0 0 60px #00f3ff;
+      letter-spacing: 8px;
+    }
+    #splash .boot-text {
+      font-size: 16px;
+      color: #adff00;
+      min-height: 24px;
+    }
+    #splash .loader {
+      width: 200px;
+      height: 4px;
+      background: rgba(0,243,255,0.2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #splash .loader-bar {
+      height: 100%;
+      background: #00f3ff;
+      box-shadow: 0 0 20px #00f3ff;
+      width: 0%;
+      transition: width 0.1s;
+    }
+    .crt-scanline {
+      position: fixed;
+      inset: 0;
+      z-index: 99;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0,0,0,0.1) 0px,
+        rgba(0,0,0,0.1) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+    }
+    @media (max-width: 768px) {
+      #splash h1 { font-size: 28px; }
+      .hud { display: none; }
+      #modeSelector { bottom: 80px; }
+      #modeSelector button { padding: 10px 16px; font-size: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <canvas id="neuralGrid"></canvas>
+    <canvas id="webcamCanvas"></canvas>
+    <canvas id="effectCanvas"></canvas>
+    <canvas id="uiCanvas"></canvas>
+    <canvas id="glitchOverlay"></canvas>
+  </div>
+
+  <div class="hud" id="scanBar">
+    <div class="data-stream"></div>
+    <div class="mode-indicator mode-hack" id="modeDisplay">HACK</div>
+  </div>
+
+  <div class="hud" id="stats">FPS: <span id="fpsVal">0</span> | HANDS: <span id="handCount">0</span></div>
+
+  <div class="hud" id="modeSelector">
+    <button class="btn-hack active" data-mode="hack">HACK</button>
+    <button class="btn-art" data-mode="art">CYBER-ART</button>
+    <button class="btn-override" data-mode="override">OVERRIDE</button>
+    <button class="btn-sokko" data-mode="sokko">SOKKO-VOID</button>
+  </div>
+
+  <div id="splash">
+    <h1>NEURO-LINK</h1>
+    <div class="boot-text" id="bootText"></div>
+    <div class="loader"><div class="loader-bar" id="loaderBar"></div></div>
+  </div>
+
+  <div class="crt-scanline"></div>
+  <video id="webcam" autoplay playsinline muted></video>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const canvas = id => { const c = $(id); c.width = window.innerWidth; c.height = window.innerHeight; return c; };
+    const ctx = id => $(id).getContext('2d');
+
+    const state = {
+      mode: 'hack',
+      hands: [],
+      faceLandmarks: null,
+      particles: [],
+      shapes: [],
+      strokes: [],
+      currentStroke: null,
+      trails: [],
+      lastHandPos: { x: 0, y: 0 },
+      handVelocity: 0,
+      fps: 0,
+      audioCtx: null,
+      droneOsc: null,
+      sokkoPadOscs: [],
+      glitchIntensity: 0,
+      gravityReversed: false,
+      filterMode: 'normal',
+      inverseGlitch: 0
+    };
+
+    const COLORS = {
+      hack: '#adff00',
+      art: '#ff0055',
+      override: '#00f3ff',
+      sokko: '#E5E4E2',
+      cyan: '#00f3ff',
+      pink: '#ff0055',
+      lime: '#adff00'
+    };
+
+    let video, hands;
+    const gridCtx = ctx('neuralGrid');
+    const webcamCtx = ctx('webcamCanvas');
+    const effectCtx = ctx('effectCanvas');
+    const uiCtx = ctx('uiCanvas');
+    const glitchCtx = ctx('glitchOverlay');
+
+    const bootSequence = [
+      'INITIALIZING NEURAL LINK...',
+      'LOADING HAND TRACKING MODULE...',
+      'CALIBRATING NEURAL GRID...',
+      'SYNCING AUDIO DRIVERS...',
+      'ACCESS GRANTED.'
+    ];
+
+    async function boot() {
+      const textEl = $('bootText'), bar = $('loaderBar');
+      for (let i = 0; i < bootSequence.length; i++) {
+        textEl.textContent = bootSequence[i];
+        bar.style.width = `${(i + 1) / bootSequence.length * 100}%`;
+        await new Promise(r => setTimeout(r, 400 + Math.random() * 300));
+      }
+      await new Promise(r => setTimeout(r, 500));
+      $('splash').style.opacity = '0';
+      setTimeout(() => $('splash').remove(), 500);
+      await initAudio();
+    }
+
+    async function initAudio() {
+      state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      state.droneOsc = state.audioCtx.createOscillator();
+      const gain = state.audioCtx.createGain();
+      const filter = state.audioCtx.createBiquadFilter();
+      state.droneOsc.type = 'sawtooth';
+      state.droneOsc.frequency.value = 50;
+      filter.type = 'lowpass';
+      filter.frequency.value = 200;
+      gain.gain.value = 0.15;
+      state.droneOsc.connect(filter);
+      filter.connect(gain);
+      gain.connect(state.audioCtx.destination);
+      state.droneOsc.start();
+    }
+
+    function updateDronePitch(y) {
+      if (state.droneOsc) {
+        const freq = 50 + (1 - y) * 150;
+        state.droneOsc.frequency.setTargetAtTime(freq, state.audioCtx.currentTime, 0.1);
+      }
+    }
+
+    function playBitCrush() {
+      if (!state.audioCtx) return;
+      const osc = state.audioCtx.createOscillator();
+      const gain = state.audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(800 + Math.random() * 400, state.audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(100, state.audioCtx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.3, state.audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, state.audioCtx.currentTime + 0.15);
+      osc.connect(gain);
+      gain.connect(state.audioCtx.destination);
+      osc.start();
+      osc.stop(state.audioCtx.currentTime + 0.2);
+    }
+
+    function playStatic() {
+      if (!state.audioCtx) return;
+      const bufferSize = state.audioCtx.sampleRate * 0.3;
+      const buffer = state.audioCtx.createBuffer(1, bufferSize, state.audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      const noise = state.audioCtx.createBufferSource();
+      noise.buffer = buffer;
+      const gain = state.audioCtx.createGain();
+      gain.gain.value = 0.4;
+      noise.connect(gain);
+      gain.connect(state.audioCtx.destination);
+      noise.start();
+    }
+
+    function initMediaPipe() {
+      hands = new Hands({
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+      });
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.75,
+        minTrackingConfidence: 0.75
+      });
+      hands.onResults(onHandsResults);
+    }
+
+    async function initWebcam() {
+      video = $('webcam');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, facingMode: 'user' }
+      });
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+    }
+
+    function onHandsResults(results) {
+      state.hands = results.multiHandLandmarks || [];
+      state.handVelocity = Math.min(state.handVelocity * 0.9, state.glitchIntensity);
+      state.glitchIntensity = Math.max(0, state.glitchIntensity - 0.02);
+    }
+
+    function distance(p1, p2) {
+      return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    }
+
+    function isPinch(hand) {
+      const thumbTip = hand[4], indexTip = hand[8];
+      return distance(thumbTip, indexTip) < 0.05;
+    }
+
+    function isVSign(hand) {
+      const indexTip = hand[8], middleTip = hand[12], ringTip = hand[16], pinkyTip = hand[20];
+      const indexPip = hand[6], middlePip = hand[10], ringPip = hand[14], pinkyPip = hand[18];
+      return indexTip.y < indexPip.y && middleTip.y < middlePip.y &&
+             ringTip.y > ringPip.y && pinkyTip.y > pinkyPip.y;
+    }
+
+    function isRockOn(hand) {
+      const indexTip = hand[8], middleTip = hand[12], ringTip = hand[16], pinkyTip = hand[20];
+      const indexPip = hand[6], middlePip = hand[10], ringPip = hand[14], pinkyPip = hand[18];
+      return indexTip.y < indexPip.y && middleTip.y > middlePip.y &&
+             ringTip.y > ringPip.y && pinkyTip.y < pinkyPip.y;
+    }
+
+    function isShaking(hand) {
+      const wrist = hand[0];
+      const vel = Math.hypot(wrist.x - state.lastHandPos.x, wrist.y - state.lastHandPos.y);
+      state.lastHandPos = { x: wrist.x, y: wrist.y };
+      return vel > 0.15;
+    }
+
+    function spawnParticles(x, y, color, count = 20) {
+      for (let i = 0; i < count; i++) {
+        state.particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 15,
+          vy: (Math.random() - 0.5) * 15,
+          life: 1,
+          decay: 0.02 + Math.random() * 0.03,
+          color,
+          size: 2 + Math.random() * 4
+        });
+      }
+    }
+
+    function spawnShape(x, y) {
+      const type = Math.random() > 0.5 ? 'cube' : 'torus';
+      state.shapes.push({
+        x, y,
+        type,
+        rotation: 0,
+        rotationSpeed: (Math.random() - 0.5) * 0.2,
+        size: 30 + Math.random() * 30,
+        life: 1,
+        decay: 0.005,
+        color: COLORS.pink,
+        floatSpeed: 0.5 + Math.random() * 0.5
+      });
+    }
+
+    function drawNeuralGrid() {
+      gridCtx.fillStyle = '#020205';
+      gridCtx.fillRect(0, 0, gridCtx.canvas.width, gridCtx.canvas.height);
+
+      const cols = 30, rows = 20;
+      const cellW = gridCtx.canvas.width / cols;
+      const cellH = gridCtx.canvas.height / rows;
+
+      gridCtx.strokeStyle = 'rgba(0, 243, 255, 0.3)';
+      gridCtx.lineWidth = 1;
+
+      state.hands.forEach(hand => {
+        const hx = hand[9].x * gridCtx.canvas.width;
+        const hy = hand[9].y * gridCtx.canvas.height;
+
+        for (let i = 0; i <= cols; i++) {
+          const x = i * cellW;
+          gridCtx.beginPath();
+          for (let j = 0; j <= rows; j++) {
+            const y = j * cellH;
+            const dist = Math.hypot(x - hx, y - hy);
+            const warp = Math.max(0, 50 - dist) * 0.5;
+            const wx = x + (hx - x) * warp / 50;
+            const wy = y + (hy - y) * warp / 50;
+            j === 0 ? gridCtx.moveTo(wx, wy) : gridCtx.lineTo(wx, wy);
+          }
+          gridCtx.stroke();
+        }
+
+        for (let j = 0; j <= rows; j++) {
+          const y = j * cellH;
+          gridCtx.beginPath();
+          for (let i = 0; i <= cols; i++) {
+            const x = i * cellW;
+            const dist = Math.hypot(x - hx, y - hy);
+            const warp = Math.max(0, 50 - dist) * 0.5;
+            const wx = x + (hx - x) * warp / 50;
+            const wy = y + (hy - y) * warp / 50;
+            i === 0 ? gridCtx.moveTo(wx, wy) : gridCtx.lineTo(wx, wy);
+          }
+          gridCtx.stroke();
+        }
+      });
+
+      if (state.hands.length === 0) {
+        for (let i = 0; i <= cols; i++) {
+          const x = i * cellW;
+          gridCtx.beginPath();
+          for (let j = 0; j <= rows; j++) {
+            const y = j * cellH + Math.sin(Date.now() * 0.001 + i * 0.2) * 5;
+            j === 0 ? gridCtx.moveTo(x, y) : gridCtx.lineTo(x, y);
+          }
+          gridCtx.stroke();
+        }
+      }
+    }
+
+    function drawWebcam() {
+      webcamCtx.save();
+      webcamCtx.scale(-1, 1);
+      webcamCtx.drawImage(video, -webcamCtx.canvas.width, 0, webcamCtx.canvas.width, webcamCtx.canvas.height);
+
+      webcamCtx.fillStyle = 'rgba(2, 2, 5, 0.3)';
+      for (let i = 0; i < 100; i++) {
+        const x = Math.random() * webcamCtx.canvas.width;
+        const y = Math.random() * webcamCtx.canvas.height;
+        webcamCtx.fillRect(x, y, 2, 2);
+      }
+      webcamCtx.restore();
+    }
+
+    function drawHandSkeleton(hand, color) {
+      const connections = [
+        [0,1],[1,2],[2,3],[3,4],
+        [0,5],[5,6],[6,7],[7,8],
+        [0,9],[9,10],[10,11],[11,12],
+        [0,13],[13,14],[14,15],[15,16],
+        [0,17],[17,18],[18,19],[19,20],
+        [5,9],[9,13],[13,17]
+      ];
+
+      effectCtx.strokeStyle = color;
+      effectCtx.lineWidth = 3;
+      effectCtx.shadowColor = color;
+      effectCtx.shadowBlur = 15;
+
+      connections.forEach(([a, b]) => {
+        const p1 = hand[a], p2 = hand[b];
+        effectCtx.beginPath();
+        effectCtx.moveTo(p1.x * effectCtx.canvas.width, p1.y * effectCtx.canvas.height);
+        effectCtx.lineTo(p2.x * effectCtx.canvas.width, p2.y * effectCtx.canvas.height);
+        effectCtx.stroke();
+      });
+
+      hand.forEach((p, i) => {
+        effectCtx.fillStyle = i === 4 || i === 8 || i === 12 || i === 16 || i === 20 ? '#fff' : color;
+        effectCtx.beginPath();
+        effectCtx.arc(p.x * effectCtx.canvas.width, p.y * effectCtx.canvas.height, i === 0 ? 8 : 5, 0, Math.PI * 2);
+        effectCtx.fill();
+      });
+    }
+
+    function drawReticles(hand) {
+      uiCtx.strokeStyle = COLORS.cyan;
+      uiCtx.lineWidth = 2;
+      uiCtx.shadowColor = COLORS.cyan;
+      uiCtx.shadowBlur = 10;
+
+      [4, 8, 12, 16, 20].forEach(i => {
+        const p = hand[i];
+        const x = p.x * uiCtx.canvas.width;
+        const y = p.y * uiCtx.canvas.height;
+        const s = 20;
+
+        uiCtx.beginPath();
+        uiCtx.moveTo(x - s, y - s); uiCtx.lineTo(x - s + 8, y - s);
+        uiCtx.lineTo(x + s, y - s); uiCtx.lineTo(x + s - 8, y - s);
+        uiCtx.lineTo(x + s, y + s); uiCtx.lineTo(x + s - 8, y + s);
+        uiCtx.lineTo(x - s, y + s); uiCtx.lineTo(x - s + 8, y + s);
+        uiCtx.closePath();
+        uiCtx.stroke();
+
+        uiCtx.beginPath();
+        uiCtx.arc(x, y, 5, 0, Math.PI * 2);
+        uiCtx.fill();
+      });
+    }
+
+    function drawParticles() {
+      for (let i = state.particles.length - 1; i >= 0; i--) {
+        const p = state.particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.3;
+        p.life -= p.decay;
+
+        if (p.life <= 0) {
+          state.particles.splice(i, 1);
+          continue;
+        }
+
+        effectCtx.globalAlpha = p.life;
+        effectCtx.fillStyle = p.color;
+        effectCtx.shadowColor = p.color;
+        effectCtx.shadowBlur = 20;
+        effectCtx.beginPath();
+        effectCtx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        effectCtx.fill();
+      }
+      effectCtx.globalAlpha = 1;
+    }
+
+    function drawShapes() {
+      for (let i = state.shapes.length - 1; i >= 0; i--) {
+        const s = state.shapes[i];
+        s.y -= s.floatSpeed;
+        s.rotation += s.rotationSpeed;
+        s.life -= s.decay;
+
+        if (s.life <= 0) {
+          state.shapes.splice(i, 1);
+          continue;
+        }
+
+        effectCtx.save();
+        effectCtx.translate(s.x, s.y);
+        effectCtx.rotate(s.rotation);
+        effectCtx.strokeStyle = s.color;
+        effectCtx.lineWidth = 3;
+        effectCtx.shadowColor = s.color;
+        effectCtx.shadowBlur = 20;
+        effectCtx.globalAlpha = s.life;
+
+        if (s.type === 'cube') {
+          const size = s.size * s.life;
+          effectCtx.strokeRect(-size/2, -size/2, size, size);
+          effectCtx.strokeRect(-size/2 + 10, -size/2 + 10, size, size);
+        } else {
+          effectCtx.beginPath();
+          effectCtx.ellipse(0, 0, s.size * s.life, s.size * 0.4 * s.life, 0, 0, Math.PI * 2);
+          effectCtx.stroke();
+          effectCtx.beginPath();
+          effectCtx.ellipse(0, 0, s.size * 0.4 * s.life, s.size * s.life, 0, 0, Math.PI * 2);
+          effectCtx.stroke();
+        }
+
+        effectCtx.restore();
+      }
+      effectCtx.globalAlpha = 1;
+    }
+
+    function drawStrokes() {
+      effectCtx.lineCap = 'round';
+      effectCtx.lineJoin = 'round';
+
+      state.strokes.forEach(stroke => {
+        if (stroke.points.length < 2) return;
+
+        effectCtx.shadowColor = COLORS.override;
+        effectCtx.shadowBlur = 30;
+
+        for (let i = 1; i < stroke.points.length; i++) {
+          const p1 = stroke.points[i - 1];
+          const p2 = stroke.points[i];
+          const progress = i / stroke.points.length;
+
+          effectCtx.strokeStyle = `rgba(0, 243, 255, ${stroke.life * progress})`;
+          effectCtx.lineWidth = 8 * progress;
+
+          effectCtx.beginPath();
+          effectCtx.moveTo(p1.x, p1.y);
+          effectCtx.lineTo(p2.x, p2.y);
+          effectCtx.stroke();
+        }
+      });
+
+      for (let i = state.strokes.length - 1; i >= 0; i--) {
+        state.strokes[i].life -= 0.01;
+        if (state.strokes[i].life <= 0) state.strokes.splice(i, 1);
+      }
+    }
+
+    function drawGlitch() {
+      if (state.glitchIntensity < 0.01) {
+        glitchCtx.clearRect(0, 0, glitchCtx.canvas.width, glitchCtx.canvas.height);
+        return;
+      }
+
+      const intensity = state.glitchIntensity * 30;
+      const sliceHeight = 10 + Math.random() * 30;
+
+      for (let y = 0; y < glitchCtx.canvas.height; y += sliceHeight) {
+        const offset = (Math.random() - 0.5) * intensity;
+        const slice = glitchCtx.createImageData(glitchCtx.canvas.width, sliceHeight);
+
+        for (let i = 0; i < slice.data.length; i += 4) {
+          const channel = i % 3;
+          if (Math.random() > 0.7) {
+            slice.data[i + channel] = 255;
+            slice.data[i + 3] = Math.random() * 200;
+          }
+        }
+
+        glitchCtx.putImageData(slice, offset, y);
+      }
+
+      state.glitchIntensity = Math.max(0, state.glitchIntensity - 0.01);
+    }
+
+    function update() {
+      const now = performance.now();
+      let fpsCount = 0;
+
+      function frame() {
+        fpsCount++;
+        if (now - lastFpsTime >= 1000) {
+          state.fps = fpsCount;
+          fpsCount = 0;
+          lastFpsTime = now;
+          $('fpsVal').textContent = state.fps;
+          $('handCount').textContent = state.hands.length;
+        }
+
+        drawNeuralGrid();
+        drawWebcam();
+        effectCtx.clearRect(0, 0, effectCtx.canvas.width, effectCtx.canvas.height);
+        uiCtx.clearRect(0, 0, uiCtx.canvas.width, uiCtx.canvas.height);
+
+        const modeColor = COLORS[state.mode];
+
+        state.hands.forEach(hand => {
+          if (state.mode === 'hack') {
+            drawHandSkeleton(hand, modeColor);
+            drawReticles(hand);
+            if (isPinch(hand)) {
+              const tip = hand[8];
+              spawnParticles(
+                tip.x * effectCtx.canvas.width,
+                tip.y * effectCtx.canvas.height,
+                COLORS.lime,
+                30
+              );
+              playBitCrush();
+              state.glitchIntensity = 0.5;
+            }
+          } else if (state.mode === 'art') {
+            if (isVSign(hand) || isRockOn(hand)) {
+              const wrist = hand[0];
+              if (Math.random() > 0.9) {
+                spawnShape(
+                  wrist.x * effectCtx.canvas.width,
+                  wrist.y * effectCtx.canvas.height
+                );
+              }
+            }
+          } else if (state.mode === 'override') {
+            const wrist = hand[0];
+            const x = wrist.x * effectCtx.canvas.width;
+            const y = wrist.y * effectCtx.canvas.height;
+
+            if (!state.currentStroke) {
+              state.currentStroke = { points: [{x, y}], life: 1 };
+              state.strokes.push(state.currentStroke);
+            } else {
+              const lastPoint = state.currentStroke.points[state.currentStroke.points.length - 1];
+              if (Math.hypot(x - lastPoint.x, y - lastPoint.y) > 10) {
+                state.currentStroke.points.push({x, y});
+              }
+            }
+
+            if (isShaking(hand)) {
+              state.strokes = [];
+              state.currentStroke = null;
+              playStatic();
+              state.glitchIntensity = 1;
+            }
+          }
+
+          if (state.hands.length > 0) {
+            updateDronePitch(hand[0].y);
+          }
+        });
+
+        if (state.mode === 'override' && state.hands.length === 0 && state.currentStroke) {
+          state.currentStroke = null;
+        }
+
+        drawParticles();
+        drawShapes();
+        drawStrokes();
+        drawGlitch();
+
+        requestAnimationFrame(frame);
+      }
+
+      let lastFpsTime = now;
+      requestAnimationFrame(frame);
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      $('modeDisplay').className = `mode-indicator mode-${mode}`;
+      $('modeDisplay').textContent = mode === 'art' ? 'CYBER-ART' : mode.toUpperCase();
+      document.querySelectorAll('#modeSelector button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
+    }
+
+    document.querySelectorAll('#modeSelector button').forEach(btn => {
+      btn.addEventListener('click', () => setMode(btn.dataset.mode));
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === '1') setMode('hack');
+      if (e.key === '2') setMode('art');
+      if (e.key === '3') setMode('override');
+    });
+
+    window.addEventListener('resize', () => {
+      ['neuralGrid', 'webcamCanvas', 'effectCanvas', 'uiCanvas', 'glitchOverlay'].forEach(id => {
+        const c = $(id);
+        c.width = window.innerWidth;
+        c.height = window.innerHeight;
+      });
+    });
+
+    (async () => {
+      await boot();
+      await initWebcam();
+      initMediaPipe();
+
+      (async () => {
+        while (true) {
+          await hands.send({ image: video });
+          await new Promise(r => setTimeout(r, 16));
+        }
+      })();
+
+      update();
+    })();
+  </script>
+</body>
+</html>
